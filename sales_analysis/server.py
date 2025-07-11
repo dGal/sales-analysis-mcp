@@ -32,7 +32,8 @@ async def get_profit_change_by_segment(
     profit_type: Literal["middle_man", "seller", "overall"],
     time_column: Literal["ym", "yq", "yh"],
     time_values: List[str],
-    group_by: List[str] = ["bu", "product", "customer"],
+    group_by: List[str] = ["bu", "product", "customer", "maker"],
+    where_sql: str = "",
     limit: int = 10):
     """
     Fetch profit change between two time periods by BU, middle_man, product.
@@ -51,6 +52,9 @@ async def get_profit_change_by_segment(
 
     group_by_clause = ", ".join(group_by)
     select_clause = ",\n            ".join(group_by)
+
+    if where_sql:
+        where_sql = "WHERE " + where_sql
 
     profit_expressions = {
         "middle_man": """
@@ -107,6 +111,7 @@ async def get_profit_change_by_segment(
                 THEN {profit_expr} ELSE 0 END
             ) AS profit_t2_jpy
         FROM sales_data sd, params
+        {where_sql}           -- <-- Inject optional WHERE clause here
         GROUP BY {group_by_clause}
     ),
     final AS (
@@ -138,6 +143,7 @@ async def get_profit_change(
     time_column: Literal["ym", "yq", "yh"],
     time_values: List[str],
     group_by: List[str] = ["bu", "product", "customer"],
+    where_sql: str = "",
     limit: int = 10) -> dict:
     """
     Get profit change data - calculates profit for all rows of one timestamp and compares them to rows in next timestamp.
@@ -146,6 +152,7 @@ async def get_profit_change(
         profit_type: 'middle_man', 'seller', or 'overall'
         time_values: list of exactly two time period strings (e.g. ['2022', '2023'])
         group_by: list of columns to group by (e.g. ['bu', 'product', 'customer', 'pn'])
+        where_sql: optional WHERE clause as string. This part is directly injected into SQL
         limit: number of rows to return (10 by default)
 
         Example of supported time_values:
@@ -164,7 +171,8 @@ async def get_profit_change(
     else:
         time_column = 'ym'
 
-    rows = await fetch_data(profit_type, time_column, time_values, group_by, limit)
+    rows = await fetch_data(profit_type, time_column, time_values, group_by,
+                            where_sql, limit)
 
     return rows
 
@@ -173,5 +181,5 @@ if __name__ == "__main__":
     import asyncio
     from pprint import pprint
 
-    rows = asyncio.run(fetch_data("middle_man", "ym", ["2022", "2023"], limit=10))
+    rows = asyncio.run(fetch_data("middle_man", "ym", ["2022", "2023"], ["bu", "product", "customer", "maker"], where_sql="maker in ('ALDG')", limit=3))
     pprint(rows)

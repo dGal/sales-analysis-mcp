@@ -30,9 +30,9 @@ async def fetch_data(*args, **kwargs):
 async def get_profit_change_by_segment(
     conn: asyncpg.Connection,
     profit_type: Literal["middle_man", "seller", "overall"],
-    time_column: Literal["ym", "yq", "yh"],
     time_values: List[str],
     group_by: List[str] = ["bu", "product", "customer", "maker"],
+    select_cols: List[str] = ["maker", "bu", "product", "customer"],
     where_sql: str = "",
     limit: int = 10):
     """
@@ -41,7 +41,7 @@ async def get_profit_change_by_segment(
     Args:
         conn: asyncpg.Connection
         profit_type: 'middle_man', 'seller', or 'overall'
-        time_column: one of 'ym', 'yq', 'yh'
+        time_col: one of 'ym', 'yq', 'yh'
         time_values: list of exactly two time period strings (e.g. ['2022', '2023'])
 
     Returns:
@@ -50,8 +50,15 @@ async def get_profit_change_by_segment(
     assert len(time_values) == 2, "Exactly two time values required"
     t1, t2 = time_values
 
+    if 'Q' in time_values[0]:
+        time_col = 'yq'
+    elif 'H' in time_values[0]:
+        time_col = 'yh'
+    else:
+        time_col = 'ym'
+
     group_by_clause = ", ".join(group_by)
-    select_clause = ",\n            ".join(group_by)
+    select_clause = ",\n            ".join(select_cols or group_by)
 
     if where_sql:
         where_sql = "WHERE " + where_sql
@@ -81,7 +88,7 @@ async def get_profit_change_by_segment(
 
     sql = f"""
     WITH params AS (
-        SELECT $1::text AS t1, $2::text AS t2, $3::text AS time_column
+        SELECT $1::text AS t1, $2::text AS t2, $3::text AS time_col
     ),
     calc AS (
         SELECT
@@ -89,24 +96,24 @@ async def get_profit_change_by_segment(
 
             SUM(
                 CASE WHEN (
-                    (params.time_column = 'ym' AND sd.ym = params.t1) OR
-                    (params.time_column = 'yq' AND sd.yq = params.t1) OR
-                    (params.time_column = 'yh' AND sd.yh = params.t1) OR
-                    (params.time_column = 'ym' AND position('/' IN params.t1) = 0 AND sd.ym LIKE params.t1 || '%') OR
-                    (params.time_column = 'yq' AND position('Q' IN params.t1) = 0 AND sd.yq LIKE params.t1 || '%') OR
-                    (params.time_column = 'yh' AND position('H' IN params.t1) = 0 AND sd.yh LIKE params.t1 || '%')
+                    (params.time_col = 'ym' AND sd.ym = params.t1) OR
+                    (params.time_col = 'yq' AND sd.yq = params.t1) OR
+                    (params.time_col = 'yh' AND sd.yh = params.t1) OR
+                    (params.time_col = 'ym' AND position('/' IN params.t1) = 0 AND sd.ym LIKE params.t1 || '%') OR
+                    (params.time_col = 'yq' AND position('Q' IN params.t1) = 0 AND sd.yq LIKE params.t1 || '%') OR
+                    (params.time_col = 'yh' AND position('H' IN params.t1) = 0 AND sd.yh LIKE params.t1 || '%')
                 )
                 THEN {profit_expr} ELSE 0 END
             ) AS profit_t1_jpy,
 
             SUM(
                 CASE WHEN (
-                    (params.time_column = 'ym' AND sd.ym = params.t2) OR
-                    (params.time_column = 'yq' AND sd.yq = params.t2) OR
-                    (params.time_column = 'yh' AND sd.yh = params.t2) OR
-                    (params.time_column = 'ym' AND position('/' IN params.t2) = 0 AND sd.ym LIKE params.t2 || '%') OR
-                    (params.time_column = 'yq' AND position('Q' IN params.t2) = 0 AND sd.yq LIKE params.t2 || '%') OR
-                    (params.time_column = 'yh' AND position('H' IN params.t2) = 0 AND sd.yh LIKE params.t2 || '%')
+                    (params.time_col = 'ym' AND sd.ym = params.t2) OR
+                    (params.time_col = 'yq' AND sd.yq = params.t2) OR
+                    (params.time_col = 'yh' AND sd.yh = params.t2) OR
+                    (params.time_col = 'ym' AND position('/' IN params.t2) = 0 AND sd.ym LIKE params.t2 || '%') OR
+                    (params.time_col = 'yq' AND position('Q' IN params.t2) = 0 AND sd.yq LIKE params.t2 || '%') OR
+                    (params.time_col = 'yh' AND position('H' IN params.t2) = 0 AND sd.yh LIKE params.t2 || '%')
                 )
                 THEN {profit_expr} ELSE 0 END
             ) AS profit_t2_jpy
@@ -134,15 +141,15 @@ async def get_profit_change_by_segment(
     LIMIT {limit};
     """
 
-    return await conn.fetch(sql, t1, t2, time_column)
+    return await conn.fetch(sql, t1, t2, time_col)
 
 
 @mcp.tool()
 async def get_profit_change(
     profit_type: Literal["middle_man", "seller", "overall"],
-    time_column: Literal["ym", "yq", "yh"],
     time_values: List[str],
     group_by: List[str] = ["bu", "product", "customer"],
+    select_cols: List[str] = ["maker", "bu", "product", "customer"],
     where_sql: str = "",
     limit: int = 10) -> dict:
     """
@@ -151,7 +158,9 @@ async def get_profit_change(
     Args:
         profit_type: 'middle_man', 'seller', or 'overall'
         time_values: list of exactly two time period strings (e.g. ['2022', '2023'])
-        group_by: list of columns to group by (e.g. ['bu', 'product', 'customer', 'pn'])
+        group_by: list of columns to group by (e.g. ['bu', 'product'], ['customer'], ..)
+        select_cols: list of columns to select (e.g. ['maker', 'bu', 'product', 'customer', 'pn'])
+                    (Time and percentage columns are automaticaly included. If option is not specified, group_by columns will be used)
         where_sql: optional WHERE clause as string. This part is directly injected into SQL
         limit: number of rows to return (10 by default)
 
@@ -164,15 +173,8 @@ async def get_profit_change(
         List of records with profit change and contribution percentages
     """
 
-    if 'Q' in time_values[0]:
-        time_column = 'yq'
-    elif 'H' in time_values[0]:
-        time_column = 'yh'
-    else:
-        time_column = 'ym'
-
-    rows = await fetch_data(profit_type, time_column, time_values, group_by,
-                            where_sql, limit)
+    rows = await fetch_data(profit_type, time_values, group_by,
+                            select_cols, where_sql, limit)
 
     return rows
 
@@ -181,5 +183,5 @@ if __name__ == "__main__":
     import asyncio
     from pprint import pprint
 
-    rows = asyncio.run(fetch_data("middle_man", "ym", ["2022", "2023"], ["bu", "product", "customer", "maker"], where_sql="maker in ('ALDG')", limit=3))
+    rows = asyncio.run(fetch_data("middle_man", ["2022", "2023"], ["bu", "product", "customer", "maker"], select_cols=["maker", "bu"], where_sql="maker in ('ALDG')", limit=3))
     pprint(rows)
